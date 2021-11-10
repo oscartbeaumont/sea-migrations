@@ -1,0 +1,20 @@
+[package]
+name = "sea-migrations"
+version = "0.0.1"
+authors = [ "Oscar Beaumont <oscar@otbeaumont.me>"]
+edition = "2021"
+description = "Effortless database migrations for SeaORM!"
+repository = "https://github.com/oscartbeaumont/sea-migrations"
+license = "MIT"
+
+[dependencies]
+sea-orm = { version = "0.3.2", features = [ "mock" ], default-features = false }
+
+[dev-dependencies]
+sea-orm = { version = "0.3.2", features = [ "sqlx-sqlite", "runtime-tokio-native-tls", "macros" ], default-features = false }
+tokio = { version = "1.13.0", features = [ "macros", "rt-multi-thread" ] }
+
+[workspace]
+members = [
+    "example",
+]
