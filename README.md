@@ -32,19 +32,18 @@ Features:
  - Automatically create database tables from your SeaORM entities
  - Write your migration code in Rust
  - Supports all SeaORM database backends
+ - Basic protections against migration inconsistencies
 
 ## Beta Warning
 
 This project is in beta and could have major changes to API or behavior in future updates. Below are some issues the project currently has:
 
 Internal issues:
- - Doesn't have unit tests
+ - Doesn't have fully test suite (only basic tests provided by example and Rust docs)
  - Uses unsafe code to access private variables from SeaORM
- - If migrations are not all run sequentially (user upgrades by 2 or more versions of the application at once) the migration version will get out of date with the migration code.
 
 Missing features:
  - Creating join tables
- - Automatically doing basic migrations such as adding a column based on the SeaORM Entity
 
 ## Install
 

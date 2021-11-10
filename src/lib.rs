@@ -24,6 +24,7 @@ pub enum MigrationStatus {
 }
 
 /// run_migrations will run the database migrations. It takes in callback function which will be called to do the migrations.
+/// In microservices environments think about how this function is called. It contains an internal lock to prevent multiple migrations from running at the same time but don't rely on it!
 ///
 /// ```rust
 /// use sea_migrations::{run_migrations, create_entity_table, MigrationStatus};
@@ -31,7 +32,7 @@ pub enum MigrationStatus {
 ///
 /// pub async fn migrations_callback(db: &DbConn, current_migration_version: Option<u32>) -> Result<MigrationStatus, DbErr> {
 ///     match current_migration_version {
-///         None => Ok(MigrationStatus::NotRequired), // Tells sea-migrations that no further migrations are required.
+///         None => Ok(MigrationStatus::NotRequired), // Tells sea-migrations that no further migrations are required. This must be returned or the migrations_callback will fall into an infinite loop.
 ///         _ => Err(DbErr::Custom("Invalid migrations version number!".into())),
 ///     }
 /// }
@@ -50,12 +51,17 @@ where
     F: Fn(&'a DbConn, Option<u32>) -> T,
 {
     migrations_table::init(db).await?;
-    let current_migrations_version = migrations_table::get_latest(db).await?;
-    let result = handler(db, current_migrations_version).await;
-    if result == Ok(MigrationStatus::Complete) {
-        migrations_table::insert_migration(db).await?;
-    }
-
+    migrations_table::lock(db).await?;
+    let result = loop {
+        let current_migrations_version = migrations_table::get_latest(db).await?;
+        let result = handler(db, current_migrations_version).await;
+        if result == Ok(MigrationStatus::Complete) {
+            migrations_table::insert_migration(db).await?;
+        } else {
+            break result;
+        }
+    };
+    migrations_table::unlock(db).await?;
     result
 }
 
