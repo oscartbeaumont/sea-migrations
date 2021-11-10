@@ -28,7 +28,6 @@ pub enum MigrationStatus {
 /// ```rust
 /// use sea_migrations::{run_migrations, create_entity_table, MigrationStatus};
 /// use sea_orm::{ Database, DbErr, ConnectionTrait, DbConn};
-/// use sea_orm::sea_query::{Alias, ColumnDef, Table};
 ///
 /// pub async fn migrations_callback(db: &DbConn, current_migration_version: Option<u32>) -> Result<MigrationStatus, DbErr> {
 ///     match current_migration_version {
@@ -60,17 +59,7 @@ where
     result
 }
 
-// CustomColumnDef is a copy of the struct defined at https://github.com/SeaQL/sea-query/blob/master/src/table/column.rs#L5 with all fields set to public.
-// It exists so that the unsafe transmutate operation can be applied to access private fields on the struct.
-// This is a TEMPORARY solution and I will ask if these values can be directly exposed by sea_query in the future. This solution relies on internal implementation details of sea_query and unsafe code which is not good!
-struct CustomColumnDef {
-    pub col_type: ColumnType,
-    pub null: bool,
-    pub unique: bool,
-    pub indexed: bool,
-}
-
-/// create_entity_table will automatically create a database table if it does not exist for a sea_query Entity.
+/// create_entity_table will create a database table if it does not exist for a sea_query Entity.
 ///
 /// ```rust
 /// use sea_orm::{Database, DbErr, ConnectionTrait, DbConn};
@@ -100,38 +89,123 @@ struct CustomColumnDef {
 /// }
 ///
 /// ```
-pub async fn create_entity_table<T: 'static>(db: &DbConn, entity: T) -> Result<ExecResult, DbErr>
+pub async fn create_entity_table<E: 'static>(db: &DbConn, entity: E) -> Result<ExecResult, DbErr>
 where
-    T: EntityTrait,
+    E: EntityTrait,
 {
     let mut stmt = Table::create();
     stmt.table(entity).if_not_exists();
 
-    for column in T::Column::iter() {
-        let column_def_prelude: CustomColumnDef = unsafe { std::mem::transmute(column.def()) }; // Note: This is used to access private fields and hence relies on internal implementation details of sea_query and unsafe code which is not good!
-        let column_def =
-            &mut ColumnDef::new_with_type(column, column_def_prelude.col_type.clone().into());
-        if column_def_prelude.null {
-            column_def.not_null();
-        }
-        if column_def_prelude.unique {
-            column_def.unique_key();
-        }
-        if column_def_prelude.indexed {
-            panic!("Indexed columns are not yet able to be migrated!");
-        }
-
-        if let Some(_) = T::PrimaryKey::from_column(column) {
-            column_def.primary_key();
-
-            if T::PrimaryKey::auto_increment() && column_def_prelude.col_type == ColumnType::Integer
-            {
-                column_def.auto_increment();
-            }
-        }
-
-        stmt.col(column_def);
+    for column in E::Column::iter() {
+        stmt.col(&mut get_column_def::<E>(column));
     }
 
     db.execute(db.get_database_backend().build(&stmt)).await
+}
+
+/// add_entity_column will automatically create a new column in the existing database table for a specific column on the Entity.
+///
+/// ```rust
+/// use sea_orm::{Database, DbErr, ConnectionTrait, DbConn};
+/// use sea_migrations::{create_entity_table, add_entity_column};
+///
+/// // The original Entity
+/// mod cake {
+///     use sea_orm::entity::prelude::*;
+///     
+///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+///     #[sea_orm(table_name = "cake")]
+///     pub struct Model {
+///         #[sea_orm(primary_key)]
+///         pub id: i32,
+///        pub name: String,
+///     }
+///
+///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+///     pub enum Relation {}
+///
+///     impl ActiveModelBehavior for ActiveModel {}
+/// }
+///
+/// // The updated Entity
+/// mod cake2 {
+///     use sea_orm::entity::prelude::*;
+///     
+///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+///     #[sea_orm(table_name = "cake")]
+///     pub struct Model {
+///         #[sea_orm(primary_key)]
+///         pub id: i32,
+///        pub name: String,
+///        pub my_new_column: String,
+///     }
+///
+///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+///     pub enum Relation {}
+///
+///     impl ActiveModelBehavior for ActiveModel {}
+/// }
+///
+/// #[tokio::main]
+/// async fn main() -> Result<(), sea_orm::DbErr> {
+///     let db = Database::connect("sqlite::memory:").await?;
+///
+///     create_entity_table(&db, cake::Entity).await?;
+///
+///     add_entity_column(&db, cake2::Entity, cake2::Column::MyNewColumn).await?;
+///
+///     Ok(())
+/// }
+///
+/// ```
+pub async fn add_entity_column<E: 'static, T: 'static>(
+    db: &DbConn,
+    entity: E,
+    column: T,
+) -> Result<ExecResult, DbErr>
+where
+    E: EntityTrait<Column = T>,
+    T: ColumnTrait,
+{
+    let mut stmt = Table::alter();
+    stmt.table(entity)
+        .add_column(&mut get_column_def::<E>(column));
+
+    db.execute(db.get_database_backend().build(&stmt)).await
+}
+
+// CustomColumnDef is a copy of the struct defined at https://github.com/SeaQL/sea-query/blob/master/src/table/column.rs#L5 with all fields set to public.
+// It exists so that the unsafe transmutate operation can be applied to access private fields on the struct.
+// This is a TEMPORARY solution and I will ask if these values can be directly exposed by sea_query in the future. This solution relies on internal implementation details of sea_query and unsafe code which is not good!
+struct CustomColumnDef {
+    pub col_type: ColumnType,
+    pub null: bool,
+    pub unique: bool,
+    pub indexed: bool,
+}
+
+// get_column_def is used to convert between the sea_orm Column and the sea_query ColumnDef.
+fn get_column_def<T: EntityTrait>(column: T::Column) -> ColumnDef {
+    let column_def_prelude: CustomColumnDef = unsafe { std::mem::transmute(column.def()) }; // Note: This is used to access private fields and hence relies on internal implementation details of sea_query and unsafe code which is not good!
+    let mut column_def =
+        ColumnDef::new_with_type(column, column_def_prelude.col_type.clone().into());
+    if column_def_prelude.null {
+        column_def.not_null();
+    }
+    if column_def_prelude.unique {
+        column_def.unique_key();
+    }
+    if column_def_prelude.indexed {
+        panic!("Indexed columns are not yet able to be migrated!");
+    }
+
+    if let Some(_) = T::PrimaryKey::from_column(column) {
+        column_def.primary_key();
+
+        if T::PrimaryKey::auto_increment() && column_def_prelude.col_type == ColumnType::Integer {
+            column_def.auto_increment();
+        }
+    }
+
+    column_def
 }

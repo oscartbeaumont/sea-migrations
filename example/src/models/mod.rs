@@ -1,10 +1,8 @@
-use sea_migrations::{create_entity_table, MigrationStatus};
-use sea_orm::{
-    sea_query::{Alias, ColumnDef, Table},
-    ConnectionTrait, DbConn, DbErr,
-};
+use sea_migrations::{add_entity_column, create_entity_table, MigrationStatus};
+use sea_orm::{DbConn, DbErr};
 
 pub mod customer;
+pub mod customer2;
 
 /// do_migrations is the callback for sea-migrations to run the migrations
 pub async fn do_migrations(
@@ -19,17 +17,7 @@ pub async fn do_migrations(
         }
         Some(1) => {
             println!("Migrating from version 1 -> 2!");
-            let stmt = Table::alter()
-                .table(customer::Entity)
-                .add_column(
-                    ColumnDef::new(Alias::new("new_column"))
-                        .integer()
-                        .not_null()
-                        .default(100),
-                )
-                .to_owned();
-            db.execute(db.get_database_backend().build(&stmt)).await?;
-
+            add_entity_column(db, customer2::Entity, customer2::Column::CustomerId).await?;
             Ok(MigrationStatus::Complete)
         }
         Some(2) => Ok(MigrationStatus::NotRequired),
