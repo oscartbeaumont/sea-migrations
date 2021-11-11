@@ -8,8 +8,8 @@ use std::future::Future;
 
 use sea_orm::{
     sea_query::{Alias, ColumnDef, ForeignKey, ForeignKeyCreateStatement, Table, TableRef},
-    ColumnTrait, ColumnType, ConnectionTrait, DbConn, DbErr, DeriveIden, EntityTrait, ExecResult,
-    Iterable, PrimaryKeyToColumn, PrimaryKeyTrait, RelationTrait, RelationType,
+    ColumnTrait, ColumnType, ConnectionTrait, DbConn, DbErr, EntityTrait, ExecResult,
+    Iterable, PrimaryKeyToColumn, PrimaryKeyTrait, RelationTrait, RelationType, Iden,
 };
 
 mod migrations_table;
