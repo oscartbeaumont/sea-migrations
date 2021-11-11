@@ -40,10 +40,13 @@ This project is in beta and could have major changes to API or behavior in futur
 
 Internal issues:
  - Doesn't have fully test suite (only basic tests provided by example and Rust docs)
- - Uses unsafe code to access private variables from SeaORM
+ - Uses unsafe code to access private variables from SeaORM (waiting on [seaQL/sea-query#183](https://github.com/SeaQL/sea-query/issues/183))
 
 Missing features:
- - Creating join tables
+ - Add relationship in migration (waiting on [seaQL/sea-query#184](https://github.com/SeaQL/sea-query/issues/184))
+ - 1 to many relations
+ - many to many relations
+ - indexed columns
 
 ## Install
 

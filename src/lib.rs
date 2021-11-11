@@ -7,15 +7,15 @@
 use std::future::Future;
 
 use sea_orm::{
-    sea_query::{ColumnDef, Table},
-    ColumnTrait, ColumnType, ConnectionTrait, DbConn, DbErr, EntityTrait, ExecResult, Iterable,
-    PrimaryKeyToColumn, PrimaryKeyTrait,
+    sea_query::{Alias, ColumnDef, ForeignKey, ForeignKeyCreateStatement, Table, TableRef},
+    ColumnTrait, ColumnType, ConnectionTrait, DbConn, DbErr, DeriveIden, EntityTrait, ExecResult,
+    Iterable, PrimaryKeyToColumn, PrimaryKeyTrait, RelationTrait, RelationType,
 };
 
 mod migrations_table;
 
 /// MigrationStatus is used to represent the status of a migration.
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum MigrationStatus {
     /// NotRequired is returned when no database migrations are required. If this is returned from the database migrations callback it is assumed by sea-migrations that the database is already up to date.
     NotRequired,
@@ -104,6 +104,13 @@ where
 
     for column in E::Column::iter() {
         stmt.col(&mut get_column_def::<E>(column));
+    }
+
+    for relation in E::Relation::iter() {
+        if relation.def().is_owner {
+            continue;
+        }
+        stmt.foreign_key(&mut get_column_foreign_key_def::<E>(relation));
     }
 
     db.execute(db.get_database_backend().build(&stmt)).await
@@ -214,4 +221,53 @@ fn get_column_def<T: EntityTrait>(column: T::Column) -> ColumnDef {
     }
 
     column_def
+}
+
+// get_column_foreign_key_def is used to convert between the sea_orm Relation and the sea_query ForeignKey.
+fn get_column_foreign_key_def<T: EntityTrait>(relation: T::Relation) -> ForeignKeyCreateStatement {
+    let rel_def = relation.def();
+    match rel_def.rel_type {
+        RelationType::HasOne => {
+            let mut foreign_key = ForeignKey::create()
+                .from(
+                    table_ref_to_alias(rel_def.from_tbl),
+                    Alias::new(&rel_def.from_col.to_string()),
+                )
+                .to(
+                    table_ref_to_alias(rel_def.to_tbl),
+                    Alias::new(&rel_def.to_col.to_string()),
+                )
+                .to_owned();
+
+            if let Some(fk_action) = rel_def.on_delete {
+                foreign_key.on_delete(fk_action);
+            }
+
+            if let Some(fk_action) = rel_def.on_update {
+                foreign_key.on_update(fk_action);
+            }
+
+            foreign_key
+        }
+        _ => panic!(
+            "Sea migrations does not yet support '{:?}' relationships!",
+            rel_def.rel_type
+        ),
+    }
+}
+
+// table_ref_to_alias converts between a sea-query TableRef and a sea-query Alias.
+fn table_ref_to_alias(table_ref: TableRef) -> Alias {
+    match table_ref {
+        TableRef::Table(iden) => Alias::new(&iden.to_string()),
+        // TableRef::SchemaTable
+        // TableRef::TableAlias
+        // TableRef::SchemaTableAlias
+        // TableRef::SubQuery
+        // TODO: Support all TableRef types.
+        _ => panic!(
+            "Sea migrations does not yet support '{:?}' TableRef!",
+            table_ref
+        ),
+    }
 }
