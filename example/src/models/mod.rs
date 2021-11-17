@@ -1,28 +1,60 @@
-use sea_migrations::{add_entity_column, create_entity_table, MigrationStatus};
-use sea_orm::{DbConn, DbErr};
+use async_trait::async_trait;
+use sea_migrations::{MigrationManager, MigrationName, MigratorTrait};
+use sea_orm::DbErr;
 
 pub mod customer;
 pub mod customer2;
 pub mod tax_info; // Customer -> Tax Info (1:1)
 
-/// do_migrations is the callback for sea-migrations to run the migrations
-pub async fn do_migrations(
-    db: &DbConn,
-    current_migration_version: Option<u32>,
-) -> Result<MigrationStatus, DbErr> {
-    match current_migration_version {
-        None => {
-            println!("Migrating empty DB -> version 1!");
-            create_entity_table(db, customer::Entity).await?;
-            create_entity_table(db, tax_info::Entity).await?;
-            Ok(MigrationStatus::Complete)
-        }
-        Some(1) => {
-            println!("Migrating from version 1 -> 2!");
-            add_entity_column(db, customer2::Entity, customer2::Column::SomeValue).await?;
-            Ok(MigrationStatus::Complete)
-        }
-        Some(2) => Ok(MigrationStatus::NotRequired),
-        _ => Err(DbErr::Custom(":(".into())),
+pub struct M20210101020202DoAThing;
+
+// TODO: MigrationName will be automatically implemented using a Derive macro in future update.
+impl MigrationName for M20210101020202DoAThing {
+    fn name(&self) -> &'static str {
+        "M20210101020202DoAThing"
+    }
+}
+
+#[async_trait]
+impl MigratorTrait for M20210101020202DoAThing {
+    async fn up(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+        println!("up: M20210101020202DoAThing");
+        mg.create_table(customer::Entity).await?;
+        mg.create_table(tax_info::Entity).await?;
+        Ok(())
+    }
+    async fn down(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+        println!("down: M20210101020202DoAThing");
+        mg.drop_table(customer::Entity).await?;
+        mg.drop_table(tax_info::Entity).await?;
+        Ok(())
+    }
+}
+
+pub struct M20210105020202DoAThingAgain;
+
+// TODO: MigrationName will be automatically implemented using a Derive macro in future update.
+impl MigrationName for M20210105020202DoAThingAgain {
+    fn name(&self) -> &'static str {
+        "M20210105020202DoAThingAgain"
+    }
+}
+
+#[async_trait]
+impl MigratorTrait for M20210105020202DoAThingAgain {
+    async fn up(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+        println!("up: M20210105020202DoAThingAgain");
+        mg.add_column(customer2::Entity, customer2::Column::SomeValue)
+            .await?;
+
+        // If you need to do anything special you have the full power of sea_query by using the DB instance at `mg.db`
+
+        Ok(())
+    }
+    async fn down(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+        println!("down: M20210105020202DoAThingAgain");
+        mg.drop_column(customer2::Entity, customer2::Column::SomeValue)
+            .await?;
+        Ok(())
     }
 }

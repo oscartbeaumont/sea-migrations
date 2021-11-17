@@ -1,273 +1,363 @@
 #![deny(missing_docs)]
+// #![deny(unsafe_code)] // TODO: Waiting on https://github.com/SeaQL/sea-orm/issues/317
 
 //! Effortless database migrations for [SeaORM](https://www.sea-ql.org/SeaORM/)!
 //!
 //! Checkout an example using this package [here](https://github.com/oscartbeaumont/sea-migrations/tree/main/example).
 
-use std::future::Future;
-
+use async_trait::async_trait;
 use sea_orm::{
-    sea_query::{Alias, ColumnDef, ForeignKey, ForeignKeyCreateStatement, Table, TableRef},
-    ColumnTrait, ColumnType, ConnectionTrait, DbConn, DbErr, EntityTrait, ExecResult,
-    Iterable, PrimaryKeyToColumn, PrimaryKeyTrait, RelationTrait, RelationType, Iden,
+    sea_query::Table, ColumnTrait, ConnectionTrait, DbConn, DbErr, EntityTrait, ExecResult,
+    Iterable, RelationTrait,
 };
 
+use crate::seaorm_integration::*;
+
 mod migrations_table;
+mod seaorm_integration;
 
-/// MigrationStatus is used to represent the status of a migration.
-#[derive(Debug, PartialEq)]
-pub enum MigrationStatus {
-    /// NotRequired is returned when no database migrations are required. If this is returned from the database migrations callback it is assumed by sea-migrations that the database is already up to date.
-    NotRequired,
-    /// Complete is returned when a migration has been run successfully. This will cause a new migration event to be added and the migration version to be incremented.
-    Complete,
+/// MigrationName is the trait implemented on a migration so that sea_migration knows what the migration is called. This can be derived using (TODO add derive macro).
+pub trait MigrationName {
+    /// Returns the name of the migration.
+    fn name(&self) -> &str;
 }
 
-/// run_migrations will run the database migrations. It takes in callback function which will be called to do the migrations.
-/// In microservices environments think about how this function is called. It contains an internal lock to prevent multiple migrations from running at the same time but don't rely on it!
+/// MigratorTrait is the trait implemented on a migrator so that sea_migration knows how to do and undo the migration.
 ///
 /// ```rust
-/// use sea_migrations::{run_migrations, create_entity_table, MigrationStatus};
-/// use sea_orm::{ Database, DbErr, ConnectionTrait, DbConn};
+/// use sea_orm::DbErr;
+/// use sea_migrations::{MigrationName, MigratorTrait, MigrationManager};
+/// use async_trait::async_trait;
 ///
-/// pub async fn migrations_callback(db: &DbConn, current_migration_version: Option<u32>) -> Result<MigrationStatus, DbErr> {
-///     match current_migration_version {
-///         None => Ok(MigrationStatus::NotRequired), // Tells sea-migrations that no further migrations are required. This must be returned or the migrations_callback will fall into an infinite loop.
-///         _ => Err(DbErr::Custom("Invalid migrations version number!".into())),
+/// pub struct M20210101020202DoAThing;
+///
+/// // TODO: MigrationName will be automatically implemented using a Derive macro in future update.
+/// impl MigrationName for M20210101020202DoAThing {
+///     fn name(&self) -> &'static str {
+///         "M20210101020202DoAThing"
 ///     }
 /// }
 ///
-/// #[tokio::main]
-/// async fn main() -> Result<(), sea_orm::DbErr> {
-///     let db = Database::connect("sqlite::memory:").await?;
-///     let migrations_result = run_migrations(&db, migrations_callback).await?;
-///     Ok(())
-/// }
-///
-/// ```
-pub async fn run_migrations<'a, T, F>(db: &'a DbConn, handler: F) -> Result<MigrationStatus, DbErr>
-where
-    T: Future<Output = Result<MigrationStatus, DbErr>>,
-    F: Fn(&'a DbConn, Option<u32>) -> T,
-{
-    migrations_table::init(db).await?;
-    migrations_table::lock(db).await?;
-    let result = loop {
-        let current_migrations_version = migrations_table::get_latest(db).await?;
-        let result = handler(db, current_migrations_version).await;
-        if result == Ok(MigrationStatus::Complete) {
-            migrations_table::insert_migration(db).await?;
-        } else {
-            break result;
-        }
-    };
-    migrations_table::unlock(db).await?;
-    result
-}
-
-/// create_entity_table will create a database table if it does not exist for a sea_query Entity.
-///
-/// ```rust
-/// use sea_orm::{Database, DbErr, ConnectionTrait, DbConn};
-/// use sea_orm::entity::prelude::*;
-/// use sea_migrations::create_entity_table;
-///
-/// #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-/// #[sea_orm(table_name = "cake")]
-/// pub struct Model {
-///     #[sea_orm(primary_key)]
-///     pub id: i32,
-///     pub name: String,
-/// }
-
-/// #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-/// pub enum Relation {}
-///
-/// impl ActiveModelBehavior for ActiveModel {}
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), sea_orm::DbErr> {
-///     let db = Database::connect("sqlite::memory:").await?;
-///
-///     create_entity_table(&db, crate::Entity).await?; // Replace "crate" with the name of the module containing your SeaORM Model.
-///
-///     Ok(())
-/// }
-///
-/// ```
-pub async fn create_entity_table<E: 'static>(db: &DbConn, entity: E) -> Result<ExecResult, DbErr>
-where
-    E: EntityTrait,
-{
-    let mut stmt = Table::create();
-    stmt.table(entity).if_not_exists();
-
-    for column in E::Column::iter() {
-        stmt.col(&mut get_column_def::<E>(column));
-    }
-
-    for relation in E::Relation::iter() {
-        if relation.def().is_owner {
-            continue;
-        }
-        stmt.foreign_key(&mut get_column_foreign_key_def::<E>(relation));
-    }
-
-    db.execute(db.get_database_backend().build(&stmt)).await
-}
-
-/// add_entity_column will automatically create a new column in the existing database table for a specific column on the Entity.
-///
-/// ```rust
-/// use sea_orm::{Database, DbErr, ConnectionTrait, DbConn};
-/// use sea_migrations::{create_entity_table, add_entity_column};
-///
-/// // The original Entity
-/// mod cake {
-///     use sea_orm::entity::prelude::*;
-///     
-///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-///     #[sea_orm(table_name = "cake")]
-///     pub struct Model {
-///         #[sea_orm(primary_key)]
-///         pub id: i32,
-///        pub name: String,
+/// #[async_trait]
+/// impl MigratorTrait for M20210101020202DoAThing {
+///     async fn up(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+///         println!("up: M20210101020202DoAThing");
+///         Ok(())
 ///     }
-///
-///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-///     pub enum Relation {}
-///
-///     impl ActiveModelBehavior for ActiveModel {}
-/// }
-///
-/// // The updated Entity
-/// mod cake2 {
-///     use sea_orm::entity::prelude::*;
-///     
-///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-///     #[sea_orm(table_name = "cake")]
-///     pub struct Model {
-///         #[sea_orm(primary_key)]
-///         pub id: i32,
-///        pub name: String,
-///        pub my_new_column: String,
+///     async fn down(&self, mg: &MigrationManager) -> Result<(), DbErr> {
+///         println!("down: M20210101020202DoAThing");
+///         Ok(())
 ///     }
-///
-///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-///     pub enum Relation {}
-///
-///     impl ActiveModelBehavior for ActiveModel {}
 /// }
-///
-/// #[tokio::main]
-/// async fn main() -> Result<(), sea_orm::DbErr> {
-///     let db = Database::connect("sqlite::memory:").await?;
-///
-///     create_entity_table(&db, cake::Entity).await?;
-///
-///     add_entity_column(&db, cake2::Entity, cake2::Column::MyNewColumn).await?;
-///
-///     Ok(())
-/// }
-///
 /// ```
-pub async fn add_entity_column<E: 'static, T: 'static>(
-    db: &DbConn,
-    entity: E,
-    column: T,
-) -> Result<ExecResult, DbErr>
-where
-    E: EntityTrait<Column = T>,
-    T: ColumnTrait,
-{
-    let mut stmt = Table::alter();
-    stmt.table(entity)
-        .add_column(&mut get_column_def::<E>(column));
+#[async_trait]
+pub trait MigratorTrait: MigrationName {
+    /// up is run to apply a database migration. You can assume anything created in here doesn't exist when it is run. If an error occurs the `down` method will be run to undo the migration before retrying.
+    async fn up(&self, mg: &MigrationManager) -> Result<(), DbErr>;
 
-    db.execute(db.get_database_backend().build(&stmt)).await
+    /// down is used to undo a database migration. You should assume that anything applied in the `up` function is not necessarily created when this is run as the `up` function may have failed.
+    async fn down(&self, mg: &MigrationManager) -> Result<(), DbErr>;
 }
 
-// CustomColumnDef is a copy of the struct defined at https://github.com/SeaQL/sea-query/blob/master/src/table/column.rs#L5 with all fields set to public.
-// It exists so that the unsafe transmutate operation can be applied to access private fields on the struct.
-// This is a TEMPORARY solution and I will ask if these values can be directly exposed by sea_query in the future. This solution relies on internal implementation details of sea_query and unsafe code which is not good!
-struct CustomColumnDef {
-    pub col_type: ColumnType,
-    pub null: bool,
-    pub unique: bool,
-    pub indexed: bool,
+/// MigrationManager is used to manage migrations. It holds the database connection and has many helpers to make your database migration code concise.
+pub struct MigrationManager<'a> {
+    /// db holds the database connection. This can be used to run any custom queries again the database.
+    pub db: &'a DbConn,
 }
 
-// get_column_def is used to convert between the sea_orm Column and the sea_query ColumnDef.
-fn get_column_def<T: EntityTrait>(column: T::Column) -> ColumnDef {
-    let column_def_prelude: CustomColumnDef = unsafe { std::mem::transmute(column.def()) }; // Note: This is used to access private fields and hence relies on internal implementation details of sea_query and unsafe code which is not good!
-    let mut column_def =
-        ColumnDef::new_with_type(column, column_def_prelude.col_type.clone().into());
-    if column_def_prelude.null {
-        column_def.not_null();
-    }
-    if column_def_prelude.unique {
-        column_def.unique_key();
-    }
-    if column_def_prelude.indexed {
-        panic!("Indexed columns are not yet able to be migrated!");
+impl<'a> MigrationManager<'a> {
+    /// new will create a new MigrationManager. This is primarily designed for internal use but is exposed in case you want to use it.
+    pub fn new(db: &'a DbConn) -> Self {
+        Self { db }
     }
 
-    if let Some(_) = T::PrimaryKey::from_column(column) {
-        column_def.primary_key();
+    /// create_table will create a database table if it does not exist for a SeaORM Entity.
+    ///
+    /// ```rust
+    /// use sea_orm::{Database, DbErr};
+    /// use sea_orm::entity::prelude::*;
+    /// use sea_migrations::MigrationManager;
+    ///
+    /// #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #[sea_orm(table_name = "cake")]
+    /// pub struct Model {
+    ///     #[sea_orm(primary_key)]
+    ///     pub id: i32,
+    ///     pub name: String,
+    /// }
 
-        if T::PrimaryKey::auto_increment() && column_def_prelude.col_type == ColumnType::Integer {
-            column_def.auto_increment();
+    /// #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// pub enum Relation {}
+    ///
+    /// impl ActiveModelBehavior for ActiveModel {}
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), DbErr> {
+    ///     let db = Database::connect("sqlite::memory:").await?;
+    ///     // You would not normally create a MigrationManager by yourself. It would be provided to the `up` or `down` function by sea_migrations.
+    ///     let mg = MigrationManager::new(&db);
+    ///
+    ///     mg.create_table(crate::Entity).await?; // Replace "crate" with the name of the module containing your SeaORM Model.
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn create_table<E: 'static>(&self, entity: E) -> Result<ExecResult, DbErr>
+    where
+        E: EntityTrait,
+    {
+        let mut stmt = Table::create();
+        stmt.table(entity).if_not_exists();
+
+        for column in E::Column::iter() {
+            stmt.col(&mut get_column_def::<E>(column));
         }
-    }
 
-    column_def
-}
-
-// get_column_foreign_key_def is used to convert between the sea_orm Relation and the sea_query ForeignKey.
-fn get_column_foreign_key_def<T: EntityTrait>(relation: T::Relation) -> ForeignKeyCreateStatement {
-    let rel_def = relation.def();
-    match rel_def.rel_type {
-        RelationType::HasOne => {
-            let mut foreign_key = ForeignKey::create()
-                .from(
-                    table_ref_to_alias(rel_def.from_tbl),
-                    Alias::new(&rel_def.from_col.to_string()),
-                )
-                .to(
-                    table_ref_to_alias(rel_def.to_tbl),
-                    Alias::new(&rel_def.to_col.to_string()),
-                )
-                .to_owned();
-
-            if let Some(fk_action) = rel_def.on_delete {
-                foreign_key.on_delete(fk_action);
+        for relation in E::Relation::iter() {
+            if relation.def().is_owner {
+                continue;
             }
-
-            if let Some(fk_action) = rel_def.on_update {
-                foreign_key.on_update(fk_action);
-            }
-
-            foreign_key
+            stmt.foreign_key(&mut get_column_foreign_key_def::<E>(relation));
         }
-        _ => panic!(
-            "Sea migrations does not yet support '{:?}' relationships!",
-            rel_def.rel_type
-        ),
+
+        self.db
+            .execute(self.db.get_database_backend().build(&stmt))
+            .await
+    }
+
+    /// drop_table will drop a database table and all of it's data for a SeaORM Entity.
+    ///
+    /// ```rust
+    /// use sea_orm::{Database, DbErr};
+    /// use sea_orm::entity::prelude::*;
+    /// use sea_migrations::MigrationManager;
+    ///
+    /// #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #[sea_orm(table_name = "cake")]
+    /// pub struct Model {
+    ///     #[sea_orm(primary_key)]
+    ///     pub id: i32,
+    ///     pub name: String,
+    /// }
+    ///
+    /// #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// pub enum Relation {}
+    ///
+    /// impl ActiveModelBehavior for ActiveModel {}
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), DbErr> {
+    ///     let db = Database::connect("sqlite::memory:").await?;
+    ///     // You would not normally create a MigrationManager by yourself. It would be provided to the `up` or `down` function by sea_migrations.
+    ///     let mg = MigrationManager::new(&db);
+    ///
+    ///     mg.drop_table(crate::Entity).await?; // Replace "crate" with the name of the module containing your SeaORM Model.
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn drop_table<E: 'static>(&self, entity: E) -> Result<ExecResult, DbErr>
+    where
+        E: EntityTrait,
+    {
+        let stmt = Table::drop().table(entity).if_exists().to_owned();
+        self.db
+            .execute(self.db.get_database_backend().build(&stmt))
+            .await
+    }
+
+    /// add_column will automatically create a new column in the existing database table for a specific column on the Entity.
+    ///
+    /// ```rust
+    /// use sea_orm::{Database, DbErr};
+    /// use sea_migrations::MigrationManager;
+    ///
+    /// mod original_model {
+    ///      use sea_orm::entity::prelude::*;
+    ///     
+    ///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    ///     #[sea_orm(table_name = "cake")]
+    ///     pub struct Model {
+    ///         #[sea_orm(primary_key)]
+    ///         pub id: i32,
+    ///         pub name: String,
+    ///     }
+    ///
+    ///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    ///     pub enum Relation {}
+    ///
+    ///     impl ActiveModelBehavior for ActiveModel {}
+    /// }
+    ///
+    /// mod updated_model {
+    ///      use sea_orm::entity::prelude::*;
+    ///     
+    ///     #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    ///     #[sea_orm(table_name = "cake")]
+    ///     pub struct Model {
+    ///         #[sea_orm(primary_key)]
+    ///         pub id: i32,
+    ///         pub name: String,
+    ///         pub new_column: String,
+    ///     }
+    ///
+    ///     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    ///     pub enum Relation {}
+    ///
+    ///     impl ActiveModelBehavior for ActiveModel {}
+    /// }
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), DbErr> {
+    ///     let db = Database::connect("sqlite::memory:").await?;
+    ///     // You would not normally create a MigrationManager by yourself. It would be provided to the `up` or `down` function by sea_migrations.
+    ///     let mg = MigrationManager::new(&db);
+    ///     mg.create_table(original_model::Entity).await?; // Create the original table without the new column. This would have been done in the previous version of your application.
+    ///
+    ///     mg.add_column(updated_model::Entity, updated_model::Column::NewColumn).await?; // Replace "updated_model" with the name of the module containing your SeaORM Model and NewColumn with the name of your new Column.
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn add_column<E: 'static, T: 'static>(
+        &self,
+        entity: E,
+        column: T,
+    ) -> Result<ExecResult, DbErr>
+    where
+        E: EntityTrait<Column = T>,
+        T: ColumnTrait,
+    {
+        let mut stmt = Table::alter();
+        stmt.table(entity)
+            .add_column(&mut get_column_def::<E>(column));
+
+        self.db
+            .execute(self.db.get_database_backend().build(&stmt))
+            .await
+    }
+
+    /// drop_column will drop a table's column and all of it's data for a Column on a SeaORM Entity.
+    ///
+    /// The example panics due to SQLite not being able to drop a column.
+    /// ```should_panic
+    /// use sea_orm::{Database, DbErr};
+    /// use sea_orm::entity::prelude::*;
+    /// use sea_migrations::MigrationManager;
+    ///
+    /// #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    /// #[sea_orm(table_name = "cake")]
+    /// pub struct Model {
+    ///     #[sea_orm(primary_key)]
+    ///     pub id: i32,
+    ///     pub name: String,
+    ///     pub column_to_remove: String, // Note: This column although removed from the database can NEVER be removed from the Model without causing issues with running older migrations.
+    /// }
+    ///
+    /// #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    /// pub enum Relation {}
+    ///
+    /// impl ActiveModelBehavior for ActiveModel {}
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), DbErr> {
+    ///     let db = Database::connect("sqlite::memory:").await?;
+    ///     // You would not normally create a MigrationManager by yourself. It would be provided to the `up` or `down` function by sea_migrations.
+    ///     let mg = MigrationManager::new(&db);
+    ///     mg.create_table(crate::Entity).await?; // Create the original table with the column. This would have been done in the previous version of your application.
+    ///
+    ///     mg.drop_column(crate::Entity, crate::Column::ColumnToRemove).await?; // Replace "crate" with the name of the module containing your SeaORM Model and ColumnToRemove with the name of the column to remove.
+    ///
+    ///     Ok(())
+    /// }
+    /// ```
+    pub async fn drop_column<E: 'static, T: 'static>(
+        &self,
+        entity: E,
+        column: T,
+    ) -> Result<ExecResult, DbErr>
+    where
+        E: EntityTrait<Column = T>,
+        T: ColumnTrait,
+    {
+        let mut stmt = Table::alter();
+        stmt.table(entity).drop_column(column);
+
+        self.db
+            .execute(self.db.get_database_backend().build(&stmt))
+            .await
     }
 }
 
-// table_ref_to_alias converts between a sea-query TableRef and a sea-query Alias.
-fn table_ref_to_alias(table_ref: TableRef) -> Alias {
-    match table_ref {
-        TableRef::Table(iden) => Alias::new(&iden.to_string()),
-        // TableRef::SchemaTable
-        // TableRef::TableAlias
-        // TableRef::SchemaTableAlias
-        // TableRef::SubQuery
-        // TODO: Support all TableRef types.
-        _ => panic!(
-            "Sea migrations does not yet support '{:?}' TableRef!",
-            table_ref
-        ),
+/// Migrator is used to handle running migration operations.
+pub struct Migrator;
+
+impl Migrator {
+    /// run will run all of the database migrations provided via the migrations parameter.
+    /// In microservice environments think about how this function is called. It contains an internal lock to prevent multiple clients running migrations at the same time but don't rely on it!
+    ///
+    /// ```rust
+    /// use sea_migrations::Migrator;
+    /// use sea_orm::{ Database, DbErr };
+    ///
+    /// #[tokio::main]
+    /// async fn main() -> Result<(), DbErr> {
+    ///     let db = Database::connect("sqlite::memory:").await?;
+    ///     
+    ///     Migrator::run(
+    ///         &db,
+    ///         &mut vec![
+    ///            // Box::new(models::M20210101020202DoAThing),
+    ///         ],
+    ///     )
+    ///     .await
+    /// }
+    ///
+    /// ```
+    // Note(oscar): I don't like that the migrations argument is mutable but it works for now and that argument will be removed in a future version so their is no point trying to fix it.
+    pub async fn run(
+        db: &DbConn,
+        migrations: &mut Vec<Box<dyn MigratorTrait>>,
+    ) -> Result<(), DbErr> {
+        let mg = MigrationManager::new(db);
+        migrations_table::init(db).await?;
+        migrations_table::lock(db).await?;
+        let result = Self::do_migrations(&mg, migrations).await;
+        migrations_table::unlock(db).await?;
+        result
+    }
+
+    // do_migrations runs the Database migrations. This function exists so it is easier to capture the error in the `run` function.
+    async fn do_migrations<'a>(
+        mg: &'a MigrationManager<'a>,
+        migrations: &mut Vec<Box<dyn MigratorTrait>>,
+    ) -> Result<(), DbErr> {
+        // Sort migrations into predictable order
+        migrations.sort_by(|a, b| a.name().cmp(b.name()));
+
+        for migration in migrations.iter() {
+            let migration_name = migration.name();
+            let migration_entry =
+                migrations_table::get_version(mg.db, migration_name.into()).await?;
+
+            match migration_entry {
+                Some(_) => {}
+                None => {
+                    let result = migration.up(mg).await;
+                    match result {
+                        Ok(_) => {
+                            migrations_table::insert_migration(mg.db, migration_name.into())
+                                .await?;
+                        }
+                        Err(err) => {
+                            migration.down(mg).await?;
+                            return Err(err);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 }

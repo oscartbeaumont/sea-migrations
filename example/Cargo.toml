@@ -8,3 +8,4 @@ publish = false
 sea-orm = { version = "^0", features = [ "sqlx-sqlite", "runtime-tokio-native-tls", "macros", "mock" ], default-features = false }
 sea-migrations = { path = "../" }
 tokio = { version = "1.13.0", features = [ "macros" ] }
+async-trait = "0.1.51"

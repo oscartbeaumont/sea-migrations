@@ -36,17 +36,7 @@ Features:
 
 ## Beta Warning
 
-This project is in beta and could have major changes to API or behavior in future updates. Below are some issues the project currently has:
-
-Internal issues:
- - Doesn't have fully test suite (only basic tests provided by example and Rust docs)
- - Uses unsafe code to access private variables from SeaORM (waiting on [seaQL/sea-query#183](https://github.com/SeaQL/sea-query/issues/183))
-
-Missing features:
- - Add relationship in migration (waiting on [seaQL/sea-query#184](https://github.com/SeaQL/sea-query/issues/184))
- - 1 to many relations
- - many to many relations
- - indexed columns
+This project is in beta and could have major changes to API or behavior in future updates. Please refer to [issue #1](https://github.com/oscartbeaumont/sea-migrations/issues/1) for more information.
 
 ## Install
 

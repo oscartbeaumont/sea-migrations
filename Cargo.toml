@@ -8,6 +8,7 @@ repository = "https://github.com/oscartbeaumont/sea-migrations"
 license = "MIT"
 
 [dependencies]
+async-trait = "0.1.51"
 sea-orm = { version = "0.3.2", features = [ "mock" ], default-features = false }
 
 [dev-dependencies]
