@@ -78,12 +78,12 @@ pub async fn unlock(db: &DbConn) -> Result<(), DbErr> {
 }
 
 /// get_version will return a migration event with a given name from the database.
-pub async fn get_version(db: &DbConn, version: String) -> Result<Option<QueryResult>, DbErr> {
+pub async fn get_version(db: &DbConn, version: &String) -> Result<Option<QueryResult>, DbErr> {
     let stmt = Query::select()
         .column(Alias::new(MIGRATIONS_TABLE_VERSION_COLUMN))
         .and_where(
             Expr::col(Alias::new(MIGRATIONS_TABLE_VERSION_COLUMN))
-                .eq(Value::String(Some(Box::new(version)))),
+                .eq(Value::String(Some(Box::new(version.clone())))),
         )
         .from(Alias::new(MIGRATIONS_TABLE_NAME))
         .to_owned();
@@ -92,11 +92,11 @@ pub async fn get_version(db: &DbConn, version: String) -> Result<Option<QueryRes
 }
 
 /// insert_migration will create a new migration event in the database.
-pub async fn insert_migration(db: &DbConn, version: String) -> Result<u32, DbErr> {
+pub async fn insert_migration(db: &DbConn, version: &String) -> Result<u32, DbErr> {
     let stmt = Query::insert()
         .into_table(Alias::new(MIGRATIONS_TABLE_NAME))
         .columns(vec![Alias::new(MIGRATIONS_TABLE_VERSION_COLUMN)])
-        .values_panic(vec![Value::String(Some(Box::new(version)))])
+        .values_panic(vec![Value::String(Some(Box::new(version.clone())))])
         .to_owned();
 
     let result = db.execute(db.get_database_backend().build(&stmt)).await?;

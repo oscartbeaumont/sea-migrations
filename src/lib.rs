@@ -12,31 +12,32 @@ use sea_orm::{
 };
 
 use crate::seaorm_integration::*;
+pub use sea_migrations_derive::*;
 
 mod migrations_table;
 mod seaorm_integration;
 
-/// MigrationName is the trait implemented on a migration so that sea_migration knows what the migration is called. This can be derived using (TODO add derive macro).
+/// MigrationName is the trait implemented on a migration so that sea_migration knows what the migration is called. This is automatically derived by the 'Migration' derive macro.
+/// ```rust
+/// use sea_migrations::Migration;
+///
+/// #[derive(Migration)]
+/// pub struct M20210101020202DoAThing;
+/// ```
 pub trait MigrationName {
     /// Returns the name of the migration.
-    fn name(&self) -> &str;
+    fn name(&self) -> &'static str;
 }
 
 /// MigratorTrait is the trait implemented on a migrator so that sea_migration knows how to do and undo the migration.
 ///
 /// ```rust
 /// use sea_orm::DbErr;
-/// use sea_migrations::{MigrationName, MigratorTrait, MigrationManager};
+/// use sea_migrations::{Migration, MigrationName, MigratorTrait, MigrationManager};
 /// use async_trait::async_trait;
 ///
+/// #[derive(Migration)]
 /// pub struct M20210101020202DoAThing;
-///
-/// // TODO: MigrationName will be automatically implemented using a Derive macro in future update.
-/// impl MigrationName for M20210101020202DoAThing {
-///     fn name(&self) -> &'static str {
-///         "M20210101020202DoAThing"
-///     }
-/// }
 ///
 /// #[async_trait]
 /// impl MigratorTrait for M20210101020202DoAThing {
@@ -336,9 +337,8 @@ impl Migrator {
         migrations.sort_by(|a, b| a.name().cmp(b.name()));
 
         for migration in migrations.iter() {
-            let migration_name = migration.name();
-            let migration_entry =
-                migrations_table::get_version(mg.db, migration_name.into()).await?;
+            let migration_name = migration.name().to_string();
+            let migration_entry = migrations_table::get_version(mg.db, &migration_name).await?;
 
             match migration_entry {
                 Some(_) => {}
@@ -346,8 +346,7 @@ impl Migrator {
                     let result = migration.up(mg).await;
                     match result {
                         Ok(_) => {
-                            migrations_table::insert_migration(mg.db, migration_name.into())
-                                .await?;
+                            migrations_table::insert_migration(mg.db, &migration_name).await?;
                         }
                         Err(err) => {
                             migration.down(mg).await?;
