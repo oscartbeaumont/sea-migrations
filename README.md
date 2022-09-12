@@ -1,3 +1,5 @@
+*This project has been deprecated as an upstream solution now exists for migrations. Check it out [here](https://www.sea-ql.org/SeaORM/docs/migration/setting-up-migration/)*
+
 <h1 align="center">Sea Migrations</h1>
 <div align="center">
  <strong>
